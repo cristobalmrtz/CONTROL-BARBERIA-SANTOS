@@ -221,7 +221,7 @@ table.mini tr:last-child td{border-bottom:none;}
    ============================================================ */
 
 // Pega aquí la URL de tu Web App de Google Apps Script (termina en /exec)
-const GAS_URL = "https://script.google.com/macros/s/AKfycbwXhODGUK_R7vcb4qL7_LJBkSvpc9hDCJT-Jce9iMdZjL9NjG_ZR87v8UCh9WxPe_JD/exec"
+const GAS_URL = "https://script.google.com/macros/s/AKfycbwXhODGUK_R7vcb4qL7_LJBkSvpc9hDCJT-Jce9iMdZjL9NjG_ZR87v8UCh9WxPe_JD/exec";
 
 // Debe ser IDÉNTICO al valor TOKEN que pongas en el código de Apps Script
 const SHOP_CODE = "santos2026";
@@ -314,7 +314,7 @@ async function gasPost(payload){
 }
 
 async function initDb(){
-  if(GAS_URL.indexOf('https://script.google.com/macros/s/AKfycbwXhODGUK_R7vcb4qL7_LJBkSvpc9hDCJT-Jce9iMdZjL9NjG_ZR87v8UCh9WxPe_JD/exec')===0){
+  if(GAS_URL.indexOf('PON_AQUI')===0){
     document.getElementById('offlineBanner').style.display = 'block';
     document.getElementById('offlineBanner').textContent = 'Falta configurar GAS_URL al inicio del código con la URL de tu Web App de Google Sheets.';
     state.configLoaded = true;
