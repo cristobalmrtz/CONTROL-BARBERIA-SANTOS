@@ -207,7 +207,6 @@ table.mini tr:last-child td{border-bottom:none;}
 
 <nav class="tabs">
   <button data-tab="registrar" class="active"><span class="ic">✂️</span>Cortes</button>
-  <button data-tab="gastos"><span class="ic">💸</span>Gastos</button>
   <button data-tab="vales"><span class="ic">🎟️</span>Vales</button>
   <button data-tab="cierres"><span class="ic">📊</span>Cierres</button>
 </nav>
@@ -260,13 +259,17 @@ function addDays(dt,n){const d=new Date(dt); d.setDate(d.getDate()+n); return d;
 function toISO(dt){return dt.getFullYear()+'-'+pad(dt.getMonth()+1)+'-'+pad(dt.getDate());}
 
 /* ---------------- state ---------------- */
+const BOLD_FEE_PCT = 1.501; // % que BOLD descuenta en cada transferencia
+const SPLIT_JORGE_CORTES = 0.75; // % de los cortes que corresponde a Jorge
+const SPLIT_CRISTOBAL_CORTES = 0.25; // % de los cortes que corresponde a Cristobal
+
 const DEFAULT_CONFIG = {
   precios: {
     promo: {label:'Promoción (L-V 9:30-14:00)', valor:16000},
     normal: {label:'Corte normal', valor:22000},
     barbero: {label:'Cliente del barbero', valor:20000},
   },
-  medios: ['Efectivo','Nequi','Otro'],
+  medios: ['Efectivo','BOLD','Otro'],
   categoriasGasto: ['Insumos','Arriendo','Servicios','Publicidad','Otro'],
 };
 
@@ -280,7 +283,7 @@ const state = {
   gastosHoy: [],
   valesHoy: [],
   form: {
-    corte: {servicio:null, precioCustom:'', medio:null, cliente:'', descuento:'', observacion:''},
+    corte: {servicio:null, precioCustom:'', medio:null},
     gasto: {categoria:null, descripcion:'', medio:null, valor:'', responsable:'', observacion:''},
     vale: {descripcion:'', valor:'', medio:null},
   },
@@ -290,6 +293,9 @@ const state = {
     month: (function(){const d=new Date(); return d.getFullYear()+'-'+pad(d.getMonth()+1);})(),
     data: null,
     loading: false,
+    saldoBoldInicial: '',
+    saldoBoldFecha: todayStr(),
+    saldoBoldLoaded: false,
   }
 };
 
@@ -356,13 +362,11 @@ async function subscribeToday(){
   if(!state.db) return;
   const t = todayStr();
   try{
-    const [v,g,va] = await Promise.all([
+    const [v,va] = await Promise.all([
       gasGet('range', {sheet:'Ventas', start:t, end:t}),
-      gasGet('range', {sheet:'Gastos', start:t, end:t}),
       gasGet('range', {sheet:'Vales', start:t, end:t}),
     ]);
     state.ventasHoy = (v.rows||[]).sort((a,b)=>(b.ts||0)-(a.ts||0));
-    state.gastosHoy = (g.rows||[]).sort((a,b)=>(b.ts||0)-(a.ts||0));
     state.valesHoy = (va.rows||[]).sort((a,b)=>(b.ts||0)-(a.ts||0));
     render();
   }catch(e){ /* silencioso: se reintenta en el siguiente sondeo */ }
@@ -381,7 +385,6 @@ function render(){
     return;
   }
   if(state.tab==='registrar') renderRegistrar(main);
-  else if(state.tab==='gastos') renderGastos(main);
   else if(state.tab==='vales') renderVales(main);
   else if(state.tab==='cierres') renderCierres(main);
 }
@@ -423,29 +426,19 @@ function renderRegistrar(main){
   });
   card.appendChild(medioRow);
 
-  const row2 = el(`<div class="row" style="margin-top:14px;"></div>`);
-  const clienteWrap = el(`<div></div>`);
-  clienteWrap.appendChild(el(`<label class="field-label">Cliente (opcional)</label>`));
-  const clienteInp = el(`<input type="text" placeholder="Nombre / referencia" value="${f.cliente}">`);
-  clienteInp.oninput = e=>{ f.cliente = e.target.value; };
-  clienteWrap.appendChild(clienteInp);
-  const descWrap = el(`<div></div>`);
-  descWrap.appendChild(el(`<label class="field-label">Descuento (opcional)</label>`));
-  const descInp = el(`<input type="number" inputmode="numeric" placeholder="0" value="${f.descuento}">`);
-  descInp.oninput = e=>{ f.descuento = e.target.value; };
-  descWrap.appendChild(descInp);
-  row2.appendChild(clienteWrap); row2.appendChild(descWrap);
-  card.appendChild(row2);
-
   const precio = servicioPrecio(f.servicio);
-  const descuento = Number(f.descuento)||0;
-  const valorRecibido = Math.max(precio - descuento, 0);
+  const valorRecibido = precio;
+  const esBold = f.medio === 'BOLD';
+  const comisionBold = esBold ? Math.round(valorRecibido * BOLD_FEE_PCT / 100) : 0;
 
   const summary = el(`<div class="stat wide" style="margin-top:14px;">
     <div class="lbl">Valor a cobrar</div>
     <div class="val">${fmtMoney(valorRecibido)}</div>
   </div>`);
   card.appendChild(summary);
+  if(esBold && valorRecibido>0){
+    card.appendChild(el(`<div class="hint">BOLD descontará ~${fmtMoney(comisionBold)} (${BOLD_FEE_PCT}%) · neto estimado para Jorge: ${fmtMoney(valorRecibido-comisionBold)}</div>`));
+  }
 
   const btn = el(`<button class="btn btn-primary" style="margin-top:14px;">Registrar corte</button>`);
   const canSave = f.servicio && f.medio && (f.servicio!=='custom' || Number(f.precioCustom)>0);
@@ -458,16 +451,16 @@ function renderRegistrar(main){
         id: genId(),
         fecha: todayStr(), hora: nowTimeStr(),
         servicio: state.config.precios[f.servicio]? state.config.precios[f.servicio].label : 'Personalizado',
+        servicioKey: f.servicio,
         precio: precio,
         medioPago: f.medio,
-        cliente: f.cliente||'',
-        descuento: descuento,
         valorRecibido: valorRecibido,
-        observacion: f.observacion||'',
+        comisionBold: comisionBold,
+        netoBold: esBold ? (valorRecibido - comisionBold) : '',
         ts: Date.now(),
       }});
       toast('Corte registrado ✓');
-      state.form.corte = {servicio:null, precioCustom:'', medio:f.medio, cliente:'', descuento:'', observacion:''};
+      state.form.corte = {servicio:null, precioCustom:'', medio:f.medio};
       subscribeToday();
     }catch(e){
       toast('No se pudo guardar');
@@ -488,105 +481,14 @@ function renderRegistrar(main){
       const item = el(`<div class="list-item">
         <div>
           <div>${v.servicio}</div>
-          <div class="meta">${v.hora||''} · ${v.medioPago}${v.cliente? ' · '+v.cliente:''}</div>
+          <div class="meta">${v.hora||''} · ${v.medioPago}</div>
         </div>
         <div style="display:flex; align-items:center; gap:8px;">
-          <div class="amt pos">${fmtMoney(v.valorRecibido)}</div>
+          <div class="amt pos">${fmtMoney(Number(v.valorRecibido)||0)}</div>
           <button class="btn-danger-ghost" data-del="${v.id}" data-col="ventas">✕</button>
         </div>
       </div>`);
       item.querySelector('[data-del]').onclick = ()=>confirmDelete('ventas', v.id, 'este corte');
-      listCard.appendChild(item);
-    });
-  }
-  main.appendChild(listCard);
-}
-
-/* ---- Gastos ---- */
-function renderGastos(main){
-  const f = state.form.gasto;
-  const card = el(`<div class="card"></div>`);
-  card.appendChild(el(`<div class="section-label">Categoría</div>`));
-  const catRow = el(`<div class="chip-row"></div>`);
-  state.config.categoriasGasto.forEach(c=>{
-    const chip = el(`<button type="button" class="chip ${f.categoria===c?'selected':''}">${c}</button>`);
-    chip.onclick = ()=>{ f.categoria=c; render(); };
-    catRow.appendChild(chip);
-  });
-  card.appendChild(catRow);
-
-  const descWrap = el(`<div></div>`);
-  descWrap.appendChild(el(`<label class="field-label">Descripción</label>`));
-  const descInp = el(`<input type="text" placeholder="Ej: compra de insumos" value="${f.descripcion}">`);
-  descInp.oninput = e=>{ f.descripcion=e.target.value; };
-  descWrap.appendChild(descInp);
-  card.appendChild(descWrap);
-
-  const row = el(`<div class="row"></div>`);
-  const valWrap = el(`<div></div>`);
-  valWrap.appendChild(el(`<label class="field-label">Valor</label>`));
-  const valInp = el(`<input type="number" inputmode="numeric" placeholder="0" value="${f.valor}">`);
-  valInp.oninput = e=>{ f.valor=e.target.value; };
-  valWrap.appendChild(valInp);
-  const respWrap = el(`<div></div>`);
-  respWrap.appendChild(el(`<label class="field-label">Responsable</label>`));
-  const respInp = el(`<input type="text" placeholder="Quién lo pagó" value="${f.responsable}">`);
-  respInp.oninput = e=>{ f.responsable=e.target.value; };
-  respWrap.appendChild(respInp);
-  row.appendChild(valWrap); row.appendChild(respWrap);
-  card.appendChild(row);
-
-  card.appendChild(el(`<div class="section-label" style="margin-top:14px;">Medio de pago</div>`));
-  const medioRow = el(`<div class="chip-row"></div>`);
-  state.config.medios.forEach(m=>{
-    const chip = el(`<button type="button" class="chip ${f.medio===m?'selected':''}">${m}</button>`);
-    chip.onclick = ()=>{ f.medio=m; render(); };
-    medioRow.appendChild(chip);
-  });
-  card.appendChild(medioRow);
-
-  const btn = el(`<button class="btn btn-primary" style="margin-top:14px;">Registrar gasto</button>`);
-  const canSave = f.categoria && f.medio && Number(f.valor)>0;
-  if(!canSave) btn.style.opacity='.5';
-  btn.onclick = async ()=>{
-    if(!canSave) return;
-    btn.disabled=true; btn.textContent='Guardando…';
-    try{
-      await gasPost({action:'add', sheet:'Gastos', data:{
-        id: genId(),
-        fecha: todayStr(), hora: nowTimeStr(),
-        categoria: f.categoria, descripcion: f.descripcion||'',
-        medioPago: f.medio, valor: Number(f.valor),
-        responsable: f.responsable||'', observacion:'',
-        ts: Date.now(),
-      }});
-      toast('Gasto registrado ✓');
-      state.form.gasto = {categoria:null, descripcion:'', medio:null, valor:'', responsable:f.responsable, observacion:''};
-      subscribeToday();
-    }catch(e){ toast('No se pudo guardar'); }
-    render();
-  };
-  card.appendChild(btn);
-  main.appendChild(card);
-
-  const listCard = el(`<div class="card"></div>`);
-  const totalHoy = state.gastosHoy.reduce((s,v)=>s+(Number(v.valor)||0),0);
-  listCard.appendChild(el(`<div class="section-label">Hoy · ${state.gastosHoy.length} gastos · <span style="color:var(--red)">${fmtMoney(totalHoy)}</span></div>`));
-  if(state.gastosHoy.length===0){
-    listCard.appendChild(el(`<div class="empty">Aún no hay gastos registrados hoy</div>`));
-  } else {
-    state.gastosHoy.forEach(v=>{
-      const item = el(`<div class="list-item">
-        <div>
-          <div>${v.categoria}${v.descripcion? ' · '+v.descripcion:''}</div>
-          <div class="meta">${v.hora||''} · ${v.medioPago}${v.responsable? ' · '+v.responsable:''}</div>
-        </div>
-        <div style="display:flex; align-items:center; gap:8px;">
-          <div class="amt neg">-${fmtMoney(v.valor)}</div>
-          <button class="btn-danger-ghost" data-del="${v.id}">✕</button>
-        </div>
-      </div>`);
-      item.querySelector('[data-del]').onclick = ()=>confirmDelete('gastos', v.id, 'este gasto');
       listCard.appendChild(item);
     });
   }
@@ -674,7 +576,12 @@ function renderCierres(main){
   const sub = el(`<div class="subtabs"></div>`);
   [['diario','Diario'],['semanal','Semanal'],['mensual','Mensual']].forEach(([k,label])=>{
     const b = el(`<button class="${state.cierreSub===k?'active':''}">${label}</button>`);
-    b.onclick = ()=>{ state.cierreSub=k; state.cierre.data=null; render(); loadCierre(); };
+    b.onclick = ()=>{
+      state.cierreSub=k; state.cierre.data=null; state.cierre.saldoBoldLoaded=false;
+      if(k==='semanal'){ state.cierre.saldoBoldFecha = toISO(addDays(startOfWeek(state.cierre.weekAnchor),6)); }
+      render(); loadCierre();
+      if(k==='semanal') loadSaldoBold();
+    };
     sub.appendChild(b);
   });
   main.appendChild(sub);
@@ -688,7 +595,11 @@ function renderCierres(main){
   } else if(state.cierreSub==='semanal'){
     pickerCard.appendChild(el(`<label class="field-label">Cualquier día de la semana a consultar</label>`));
     const inp = el(`<input type="date" value="${state.cierre.weekAnchor}">`);
-    inp.onchange = e=>{ state.cierre.weekAnchor=e.target.value; state.cierre.data=null; render(); loadCierre(); };
+    inp.onchange = e=>{
+      state.cierre.weekAnchor=e.target.value; state.cierre.data=null; state.cierre.saldoBoldLoaded=false;
+      state.cierre.saldoBoldFecha = toISO(addDays(startOfWeek(state.cierre.weekAnchor),6));
+      render(); loadCierre(); loadSaldoBold();
+    };
     pickerCard.appendChild(inp);
     const wStart = startOfWeek(state.cierre.weekAnchor);
     const wEnd = addDays(wStart,6);
@@ -755,24 +666,63 @@ async function loadCierre(){
   render();
 }
 
+async function loadSaldoBold(){
+  if(!state.db) return;
+  const fecha = state.cierre.saldoBoldFecha;
+  try{
+    const {saldoInicial} = await gasGet('saldoBold', {weekStart: fecha});
+    state.cierre.saldoBoldInicial = (saldoInicial===null || saldoInicial===undefined) ? '' : saldoInicial;
+  }catch(e){ /* se deja vacío si falla */ }
+  state.cierre.saldoBoldLoaded = true;
+  render();
+}
+
+async function saveSaldoBold(valor){
+  const fecha = state.cierre.saldoBoldFecha;
+  try{
+    await gasPost({action:'setSaldoBold', weekStart: fecha, saldoInicial: Number(valor)||0});
+    toast('Saldo guardado para '+fmtDateHuman(fecha));
+  }catch(e){ toast('No se pudo guardar el saldo'); }
+}
+
 function computeCierre(ventas, gastos, vales, start, end){
   const sum = (arr,field)=>arr.reduce((s,x)=>s+(Number(x[field])||0),0);
   const byMedio = (arr,field,medio)=>arr.filter(x=>x.medioPago===medio).reduce((s,x)=>s+(Number(x[field])||0),0);
+  // "monto" de cada venta = lo que paga el cliente = corte/servicio + propina
+  const montoVenta = v => (Number(v.valorRecibido)||0);
+  const sumMonto = arr => arr.reduce((s,v)=>s+montoVenta(v),0);
+  const sumMontoMedio = (arr,medio) => arr.filter(v=>v.medioPago===medio).reduce((s,v)=>s+montoVenta(v),0);
 
-  const ventasTotal = sum(ventas,'valorRecibido');
-  const ventasEfectivo = byMedio(ventas,'valorRecibido','Efectivo');
-  const ventasOtro = ventasTotal - ventasEfectivo;
+  const ventasTotal = sumMonto(ventas);
+  const ventasEfectivo = sumMontoMedio(ventas,'Efectivo');
+  const ventasBold = sumMontoMedio(ventas,'BOLD');
+  const ventasOtro = ventasTotal - ventasEfectivo - ventasBold;
 
   const gastosTotal = sum(gastos,'valor');
   const gastosEfectivo = byMedio(gastos,'valor','Efectivo');
-  const gastosOtro = gastosTotal - gastosEfectivo;
+  const gastosBold = byMedio(gastos,'valor','BOLD');
+  const gastosOtro = gastosTotal - gastosEfectivo - gastosBold;
 
   const valesTotal = sum(vales,'valor');
   const valesEfectivo = byMedio(vales,'valor','Efectivo');
-  const valesOtro = valesTotal - valesEfectivo;
+  const valesBold = byMedio(vales,'valor','BOLD');
+  const valesOtro = valesTotal - valesEfectivo - valesBold;
 
   const cajaEsperada = ventasEfectivo - gastosEfectivo - valesEfectivo;
   const resultadoNeto = ventasTotal - gastosTotal - valesTotal;
+
+  // comisión BOLD (lo que se descuenta a Jorge por recibir pagos en BOLD)
+  const comisionBoldTotal = ventas.filter(v=>v.medioPago==='BOLD').reduce((s,v)=>s+(Number(v.comisionBold)||0),0);
+  const netoBoldTotal = ventasBold - comisionBoldTotal;
+
+  // separar cortes normales (entran al reparto 75/25) de "Personalizado" (100% Jorge)
+  let ingresosCortes=0, ingresosExtraJorge=0;
+  ventas.forEach(v=>{
+    if(v.servicioKey==='custom'){ ingresosExtraJorge += Number(v.valorRecibido)||0; }
+    else{ ingresosCortes += Number(v.valorRecibido)||0; }
+  });
+  const jorgeTotal = ingresosCortes*SPLIT_JORGE_CORTES + ingresosExtraJorge;
+  const cristobalTotal = ingresosCortes*SPLIT_CRISTOBAL_CORTES;
 
   // por servicio
   const servicioMap = {};
@@ -786,7 +736,7 @@ function computeCierre(ventas, gastos, vales, start, end){
   // por día (para semanal/mensual)
   const diaMap = {};
   ventas.forEach(v=>{
-    diaMap[v.fecha] = (diaMap[v.fecha]||0) + (Number(v.valorRecibido)||0);
+    diaMap[v.fecha] = (diaMap[v.fecha]||0) + montoVenta(v);
   });
   const dias = Object.keys(diaMap).sort();
   const maxDia = dias.reduce((m,d)=> diaMap[d]>diaMap[m||d]? d : (m||d), null);
@@ -794,10 +744,12 @@ function computeCierre(ventas, gastos, vales, start, end){
   return {
     start, end,
     cortesCount: ventas.length,
-    ventasTotal, ventasEfectivo, ventasOtro,
-    gastosTotal, gastosEfectivo, gastosOtro,
-    valesTotal, valesEfectivo, valesOtro,
+    ventasTotal, ventasEfectivo, ventasBold, ventasOtro,
+    gastosTotal, gastosEfectivo, gastosBold, gastosOtro,
+    valesTotal, valesEfectivo, valesBold, valesOtro,
     cajaEsperada, resultadoNeto,
+    comisionBoldTotal, netoBoldTotal,
+    ingresosCortes, ingresosExtraJorge, jorgeTotal, cristobalTotal,
     servicioMap, diaMap, maxDia,
   };
 }
@@ -825,15 +777,67 @@ function renderCierreResult(main, d){
   medioCard.appendChild(el(`<table class="mini">
     <tr><th>Medio</th><th style="text-align:right;">Ventas</th></tr>
     <tr><td>Efectivo</td><td style="text-align:right;">${fmtMoney(d.ventasEfectivo)}</td></tr>
-    <tr><td>Nequi / otro</td><td style="text-align:right;">${fmtMoney(d.ventasOtro)}</td></tr>
+    <tr><td>BOLD</td><td style="text-align:right;">${fmtMoney(d.ventasBold)}</td></tr>
+    <tr><td>Otro</td><td style="text-align:right;">${fmtMoney(d.ventasOtro)}</td></tr>
   </table>`));
   medioCard.appendChild(el(`<div class="section-label" style="margin-top:14px;">Gastos por medio de pago</div>`));
   medioCard.appendChild(el(`<table class="mini">
     <tr><th>Medio</th><th style="text-align:right;">Gastos</th></tr>
     <tr><td>Efectivo</td><td style="text-align:right;">${fmtMoney(d.gastosEfectivo)}</td></tr>
-    <tr><td>Nequi / otro</td><td style="text-align:right;">${fmtMoney(d.gastosOtro)}</td></tr>
+    <tr><td>BOLD</td><td style="text-align:right;">${fmtMoney(d.gastosBold)}</td></tr>
+    <tr><td>Otro</td><td style="text-align:right;">${fmtMoney(d.gastosOtro)}</td></tr>
   </table>`));
   main.appendChild(medioCard);
+
+  if(d.ventasBold>0){
+    const boldCard = el(`<div class="card"></div>`);
+    boldCard.appendChild(el(`<div class="section-label">Cuenta BOLD (es de Jorge)</div>`));
+    boldCard.appendChild(el(`<table class="mini">
+      <tr><td>Recibido en BOLD (bruto)</td><td style="text-align:right;">${fmtMoney(d.ventasBold)}</td></tr>
+      <tr><td>Comisión BOLD estimada (${BOLD_FEE_PCT}%)</td><td style="text-align:right; color:var(--red);">-${fmtMoney(d.comisionBoldTotal)}</td></tr>
+      <tr><td><strong>Neto recibido en BOLD</strong></td><td style="text-align:right;"><strong>${fmtMoney(d.netoBoldTotal)}</strong></td></tr>
+    </table>`));
+    boldCard.appendChild(el(`<div class="hint">No incluye la comisión de los envíos que Jorge hace desde BOLD a otras cuentas (esos también cobran ${BOLD_FEE_PCT}%).</div>`));
+    main.appendChild(boldCard);
+  }
+
+  if(state.cierreSub==='semanal'){
+    const saldoCard = el(`<div class="card"></div>`);
+    saldoCard.appendChild(el(`<div class="section-label">Saldo de la cuenta BOLD</div>`));
+    saldoCard.appendChild(el(`<label class="field-label">Fecha del cierre (el día que lo registras)</label>`));
+    const fechaInp = el(`<input type="date" value="${state.cierre.saldoBoldFecha}">`);
+    fechaInp.onchange = e=>{ state.cierre.saldoBoldFecha = e.target.value; state.cierre.saldoBoldLoaded=false; render(); loadSaldoBold(); };
+    saldoCard.appendChild(fechaInp);
+    if(!state.cierre.saldoBoldLoaded){
+      saldoCard.appendChild(el(`<div class="empty">Cargando…</div>`));
+    } else {
+      saldoCard.appendChild(el(`<label class="field-label" style="margin-top:12px;">Con cuánto empezó la cuenta ese día</label>`));
+      const row = el(`<div class="row" style="align-items:center;"></div>`);
+      const inp = el(`<input type="number" inputmode="numeric" placeholder="0" value="${state.cierre.saldoBoldInicial}">`);
+      inp.oninput = e=>{ state.cierre.saldoBoldInicial = e.target.value; };
+      const saveBtn = el(`<button class="btn btn-ghost" style="flex:none; width:auto; padding:11px 16px;">Guardar</button>`);
+      saveBtn.onclick = async ()=>{ await saveSaldoBold(state.cierre.saldoBoldInicial); };
+      row.appendChild(inp); row.appendChild(saveBtn);
+      saldoCard.appendChild(row);
+      const saldoInicial = Number(state.cierre.saldoBoldInicial)||0;
+      const saldoEsperado = saldoInicial + d.netoBoldTotal;
+      saldoCard.appendChild(el(`<div class="stat wide" style="margin-top:12px;"><div class="lbl">Saldo esperado al cierre (sin contar envíos salientes)</div><div class="val">${fmtMoney(saldoEsperado)}</div></div>`));
+      saldoCard.appendChild(el(`<div class="hint">Compáralo con lo que realmente muestra BOLD. La diferencia suele ser por los envíos que Jorge hizo a otras cuentas (también pierden ${BOLD_FEE_PCT}%) mezclados con el dinero nuevo.</div>`));
+    }
+    main.appendChild(saldoCard);
+  }
+
+  const repartoCard = el(`<div class="card"></div>`);
+  repartoCard.appendChild(el(`<div class="section-label">Reparto Jorge / Cristóbal</div>`));
+  repartoCard.appendChild(el(`<table class="mini">
+    <tr><td>Cortes (base del reparto 75/25)</td><td style="text-align:right;">${fmtMoney(d.ingresosCortes)}</td></tr>
+    <tr><td>Personalizado (100% Jorge)</td><td style="text-align:right;">${fmtMoney(d.ingresosExtraJorge)}</td></tr>
+  </table>`));
+  repartoCard.appendChild(el(`<div class="stat-grid" style="margin-top:10px;">
+    <div class="stat"><div class="lbl">Jorge (75% cortes + personalizado)</div><div class="val">${fmtMoney(d.jorgeTotal)}</div></div>
+    <div class="stat"><div class="lbl">Cristóbal (25% cortes)</div><div class="val">${fmtMoney(d.cristobalTotal)}</div></div>
+  </div>`));
+  main.appendChild(repartoCard);
 
   if(Object.keys(d.servicioMap).length){
     const sCard = el(`<div class="card"></div>`);
@@ -867,7 +871,8 @@ function renderCierreResult(main, d){
     vCard.appendChild(el(`<table class="mini">
       <tr><th>Medio</th><th style="text-align:right;">Total</th></tr>
       <tr><td>Efectivo</td><td style="text-align:right;">${fmtMoney(d.valesEfectivo)}</td></tr>
-      <tr><td>Nequi / otro</td><td style="text-align:right;">${fmtMoney(d.valesOtro)}</td></tr>
+      <tr><td>BOLD</td><td style="text-align:right;">${fmtMoney(d.valesBold)}</td></tr>
+      <tr><td>Otro</td><td style="text-align:right;">${fmtMoney(d.valesOtro)}</td></tr>
       <tr><td><strong>Total vales</strong></td><td style="text-align:right;"><strong>${fmtMoney(d.valesTotal)}</strong></td></tr>
     </table>`));
     main.appendChild(vCard);
@@ -920,10 +925,6 @@ function openSettings(){
     modal.appendChild(row);
   });
 
-  modal.appendChild(el(`<label class="field-label" style="margin-top:14px;">Categorías de gasto (una por línea)</label>`));
-  const catTa = el(`<textarea>${c.categoriasGasto.join('\n')}</textarea>`);
-  modal.appendChild(catTa);
-
   modal.appendChild(el(`<p class="small-note" style="margin-top:10px;">Los cambios se sincronizan para todos los que usen esta app.</p>`));
 
   const row = el(`<div class="row" style="margin-top:14px;"></div>`);
@@ -935,7 +936,6 @@ function openSettings(){
     Object.entries(priceInputs).forEach(([key,inp])=>{
       newConfig.precios[key].valor = Number(inp.value)||0;
     });
-    newConfig.categoriasGasto = catTa.value.split('\n').map(s=>s.trim()).filter(Boolean);
     try{
       await gasPost({action:'setConfig', config:newConfig});
       state.config = newConfig;
@@ -953,7 +953,7 @@ function openSettings(){
 
 /* ---------------- wiring ---------------- */
 document.querySelectorAll('nav.tabs button').forEach(b=>{
-  b.onclick = ()=>{ state.tab = b.dataset.tab; if(state.tab==='cierres'){ state.cierre.data=null; } render(); if(state.tab==='cierres'){ loadCierre(); } };
+  b.onclick = ()=>{ state.tab = b.dataset.tab; if(state.tab==='cierres'){ state.cierre.data=null; } render(); if(state.tab==='cierres'){ loadCierre(); if(state.cierreSub==='semanal') loadSaldoBold(); } };
 });
 document.getElementById('btnSettings').onclick = openSettings;
 
