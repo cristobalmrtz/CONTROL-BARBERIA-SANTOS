@@ -259,6 +259,8 @@ function addDays(dt,n){const d=new Date(dt); d.setDate(d.getDate()+n); return d;
 function toISO(dt){return dt.getFullYear()+'-'+pad(dt.getMonth()+1)+'-'+pad(dt.getDate());}
 
 /* ---------------- state ---------------- */
+function isBold(medio){ return medio==='BOLD' || medio==='Nequi'; } // 'Nequi' = nombre antiguo de BOLD
+
 const BOLD_FEE_PCT = 1.501; // % que BOLD descuenta en cada transferencia
 const SPLIT_JORGE_CORTES = 0.75; // % de los cortes que corresponde a Jorge
 const SPLIT_CRISTOBAL_CORTES = 0.25; // % de los cortes que corresponde a Cristobal
@@ -336,6 +338,9 @@ async function initDb(){
       await gasPost({action:'setConfig', config: DEFAULT_CONFIG});
       state.config = JSON.parse(JSON.stringify(DEFAULT_CONFIG));
     }
+    // "medios" no es editable desde la app: siempre usamos el del código,
+    // para que un valor viejo guardado en Sheets (ej. "Nequi") no lo pise.
+    state.config.medios = DEFAULT_CONFIG.medios;
   }catch(e){
     document.getElementById('offlineBanner').style.display = 'block';
     document.getElementById('offlineBanner').textContent = 'No se pudo conectar con Google Sheets: ' + e.message;
@@ -688,31 +693,33 @@ async function saveSaldoBold(valor){
 function computeCierre(ventas, gastos, vales, start, end){
   const sum = (arr,field)=>arr.reduce((s,x)=>s+(Number(x[field])||0),0);
   const byMedio = (arr,field,medio)=>arr.filter(x=>x.medioPago===medio).reduce((s,x)=>s+(Number(x[field])||0),0);
+  const byBold = (arr,field)=>arr.filter(x=>isBold(x.medioPago)).reduce((s,x)=>s+(Number(x[field])||0),0);
   // "monto" de cada venta = lo que paga el cliente = corte/servicio + propina
   const montoVenta = v => (Number(v.valorRecibido)||0);
   const sumMonto = arr => arr.reduce((s,v)=>s+montoVenta(v),0);
   const sumMontoMedio = (arr,medio) => arr.filter(v=>v.medioPago===medio).reduce((s,v)=>s+montoVenta(v),0);
+  const sumMontoBold = arr => arr.filter(v=>isBold(v.medioPago)).reduce((s,v)=>s+montoVenta(v),0);
 
   const ventasTotal = sumMonto(ventas);
   const ventasEfectivo = sumMontoMedio(ventas,'Efectivo');
-  const ventasBold = sumMontoMedio(ventas,'BOLD');
+  const ventasBold = sumMontoBold(ventas);
   const ventasOtro = ventasTotal - ventasEfectivo - ventasBold;
 
   const gastosTotal = sum(gastos,'valor');
   const gastosEfectivo = byMedio(gastos,'valor','Efectivo');
-  const gastosBold = byMedio(gastos,'valor','BOLD');
+  const gastosBold = byBold(gastos,'valor');
   const gastosOtro = gastosTotal - gastosEfectivo - gastosBold;
 
   const valesTotal = sum(vales,'valor');
   const valesEfectivo = byMedio(vales,'valor','Efectivo');
-  const valesBold = byMedio(vales,'valor','BOLD');
+  const valesBold = byBold(vales,'valor');
   const valesOtro = valesTotal - valesEfectivo - valesBold;
 
   const cajaEsperada = ventasEfectivo - gastosEfectivo - valesEfectivo;
   const resultadoNeto = ventasTotal - gastosTotal - valesTotal;
 
   // comisión BOLD (lo que se descuenta a Jorge por recibir pagos en BOLD)
-  const comisionBoldTotal = ventas.filter(v=>v.medioPago==='BOLD').reduce((s,v)=>s+(Number(v.comisionBold)||0),0);
+  const comisionBoldTotal = ventas.filter(v=>isBold(v.medioPago)).reduce((s,v)=>s+Math.round(montoVenta(v)*BOLD_FEE_PCT/100),0);
   const netoBoldTotal = ventasBold - comisionBoldTotal;
 
   // separar cortes normales (entran al reparto 75/25) de "Personalizado" (100% Jorge)
