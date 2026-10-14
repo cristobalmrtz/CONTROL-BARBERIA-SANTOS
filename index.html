@@ -261,7 +261,8 @@ function toISO(dt){return dt.getFullYear()+'-'+pad(dt.getMonth()+1)+'-'+pad(dt.g
 /* ---------------- state ---------------- */
 function isBold(medio){ return medio==='BOLD' || medio==='Nequi'; } // 'Nequi' = nombre antiguo de BOLD
 
-const BOLD_FEE_PCT = 1.501; // % que BOLD descuenta en cada transferencia
+const BOLD_FEE_PCT = 1.501; // % que BOLD descuenta al RECIBIR un pago
+const TRANSFER_TAX_PCT = 0.4; // 4x1000: lo que cobran los envíos que Jorge hace DESDE BOLD a otras cuentas
 const SPLIT_JORGE_CORTES = 0.75; // % de los cortes que corresponde a Jorge
 const SPLIT_CRISTOBAL_CORTES = 0.25; // % de los cortes que corresponde a Cristobal
 
@@ -725,7 +726,7 @@ function computeCierre(ventas, gastos, vales, start, end){
   // salidas de BOLD: los vales y gastos registrados con medio BOLD son los envíos
   // que Jorge hace a otras cuentas — también pierden comisión al salir
   const salidasBoldNominal = valesBold + gastosBold;
-  const comisionSalidaBold = [...vales, ...gastos].filter(x=>isBold(x.medioPago)).reduce((s,x)=>s+Math.round((Number(x.valor)||0)*BOLD_FEE_PCT/100),0);
+  const comisionSalidaBold = [...vales, ...gastos].filter(x=>isBold(x.medioPago)).reduce((s,x)=>s+Math.round((Number(x.valor)||0)*TRANSFER_TAX_PCT/100),0);
   const netoSalidaBold = salidasBoldNominal + comisionSalidaBold;
 
   // separar cortes normales (entran al reparto 75/25) de "Personalizado" (100% Jorge)
@@ -814,7 +815,7 @@ function renderCierreResult(main, d){
     boldCard.appendChild(el(`<div class="section-label" style="margin-top:14px;">Envíos de Jorge desde BOLD (vales/gastos en BOLD)</div>`));
     boldCard.appendChild(el(`<table class="mini">
       <tr><td>Enviado (bruto)</td><td style="text-align:right;">${fmtMoney(d.salidasBoldNominal)}</td></tr>
-      <tr><td>Comisión al enviar (${BOLD_FEE_PCT}%)</td><td style="text-align:right; color:var(--red);">-${fmtMoney(d.comisionSalidaBold)}</td></tr>
+      <tr><td>4x1000 al enviar (${TRANSFER_TAX_PCT}%)</td><td style="text-align:right; color:var(--red);">-${fmtMoney(d.comisionSalidaBold)}</td></tr>
       <tr><td><strong>Total que sale de BOLD</strong></td><td style="text-align:right;"><strong>-${fmtMoney(d.netoSalidaBold)}</strong></td></tr>
     </table>`));
     boldCard.appendChild(el(`<div class="hint">Si Jorge hizo algún envío que no quedó registrado como vale/gasto en BOLD, ese sí va a seguir generando diferencia.</div>`));
