@@ -718,9 +718,15 @@ function computeCierre(ventas, gastos, vales, start, end){
   const cajaEsperada = ventasEfectivo - gastosEfectivo - valesEfectivo;
   const resultadoNeto = ventasTotal - gastosTotal - valesTotal;
 
-  // comisión BOLD (lo que se descuenta a Jorge por recibir pagos en BOLD)
+  // comisión BOLD al recibir (lo que se descuenta a Jorge por recibir pagos en BOLD)
   const comisionBoldTotal = ventas.filter(v=>isBold(v.medioPago)).reduce((s,v)=>s+Math.round(montoVenta(v)*BOLD_FEE_PCT/100),0);
   const netoBoldTotal = ventasBold - comisionBoldTotal;
+
+  // salidas de BOLD: los vales y gastos registrados con medio BOLD son los envíos
+  // que Jorge hace a otras cuentas — también pierden comisión al salir
+  const salidasBoldNominal = valesBold + gastosBold;
+  const comisionSalidaBold = [...vales, ...gastos].filter(x=>isBold(x.medioPago)).reduce((s,x)=>s+Math.round((Number(x.valor)||0)*BOLD_FEE_PCT/100),0);
+  const netoSalidaBold = salidasBoldNominal + comisionSalidaBold;
 
   // separar cortes normales (entran al reparto 75/25) de "Personalizado" (100% Jorge)
   let ingresosCortes=0, ingresosExtraJorge=0;
@@ -756,6 +762,7 @@ function computeCierre(ventas, gastos, vales, start, end){
     valesTotal, valesEfectivo, valesBold, valesOtro,
     cajaEsperada, resultadoNeto,
     comisionBoldTotal, netoBoldTotal,
+    salidasBoldNominal, comisionSalidaBold, netoSalidaBold,
     ingresosCortes, ingresosExtraJorge, jorgeTotal, cristobalTotal,
     servicioMap, diaMap, maxDia,
   };
@@ -796,15 +803,21 @@ function renderCierreResult(main, d){
   </table>`));
   main.appendChild(medioCard);
 
-  if(d.ventasBold>0){
+  if(d.ventasBold>0 || d.salidasBoldNominal>0){
     const boldCard = el(`<div class="card"></div>`);
     boldCard.appendChild(el(`<div class="section-label">Cuenta BOLD (es de Jorge)</div>`));
     boldCard.appendChild(el(`<table class="mini">
       <tr><td>Recibido en BOLD (bruto)</td><td style="text-align:right;">${fmtMoney(d.ventasBold)}</td></tr>
-      <tr><td>Comisión BOLD estimada (${BOLD_FEE_PCT}%)</td><td style="text-align:right; color:var(--red);">-${fmtMoney(d.comisionBoldTotal)}</td></tr>
+      <tr><td>Comisión al recibir (${BOLD_FEE_PCT}%)</td><td style="text-align:right; color:var(--red);">-${fmtMoney(d.comisionBoldTotal)}</td></tr>
       <tr><td><strong>Neto recibido en BOLD</strong></td><td style="text-align:right;"><strong>${fmtMoney(d.netoBoldTotal)}</strong></td></tr>
     </table>`));
-    boldCard.appendChild(el(`<div class="hint">No incluye la comisión de los envíos que Jorge hace desde BOLD a otras cuentas (esos también cobran ${BOLD_FEE_PCT}%).</div>`));
+    boldCard.appendChild(el(`<div class="section-label" style="margin-top:14px;">Envíos de Jorge desde BOLD (vales/gastos en BOLD)</div>`));
+    boldCard.appendChild(el(`<table class="mini">
+      <tr><td>Enviado (bruto)</td><td style="text-align:right;">${fmtMoney(d.salidasBoldNominal)}</td></tr>
+      <tr><td>Comisión al enviar (${BOLD_FEE_PCT}%)</td><td style="text-align:right; color:var(--red);">-${fmtMoney(d.comisionSalidaBold)}</td></tr>
+      <tr><td><strong>Total que sale de BOLD</strong></td><td style="text-align:right;"><strong>-${fmtMoney(d.netoSalidaBold)}</strong></td></tr>
+    </table>`));
+    boldCard.appendChild(el(`<div class="hint">Si Jorge hizo algún envío que no quedó registrado como vale/gasto en BOLD, ese sí va a seguir generando diferencia.</div>`));
     main.appendChild(boldCard);
   }
 
@@ -827,9 +840,9 @@ function renderCierreResult(main, d){
       row.appendChild(inp); row.appendChild(saveBtn);
       saldoCard.appendChild(row);
       const saldoInicial = Number(state.cierre.saldoBoldInicial)||0;
-      const saldoEsperado = saldoInicial + d.netoBoldTotal;
-      saldoCard.appendChild(el(`<div class="stat wide" style="margin-top:12px;"><div class="lbl">Saldo esperado al cierre (sin contar envíos salientes)</div><div class="val">${fmtMoney(saldoEsperado)}</div></div>`));
-      saldoCard.appendChild(el(`<div class="hint">Compáralo con lo que realmente muestra BOLD. La diferencia suele ser por los envíos que Jorge hizo a otras cuentas (también pierden ${BOLD_FEE_PCT}%) mezclados con el dinero nuevo.</div>`));
+      const saldoEsperado = saldoInicial + d.netoBoldTotal - d.netoSalidaBold;
+      saldoCard.appendChild(el(`<div class="stat wide" style="margin-top:12px;"><div class="lbl">Saldo esperado al cierre</div><div class="val">${fmtMoney(saldoEsperado)}</div></div>`));
+      saldoCard.appendChild(el(`<div class="hint">= saldo inicial + neto recibido en BOLD − lo que salió (vales/gastos en BOLD + su comisión). Si no coincide con lo que muestra BOLD, revisa si falta registrar algún envío de Jorge como vale/gasto en BOLD.</div>`));
     }
     main.appendChild(saldoCard);
   }
