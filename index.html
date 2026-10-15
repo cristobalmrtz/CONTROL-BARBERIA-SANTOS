@@ -732,7 +732,7 @@ function computeCierre(ventas, gastos, vales, start, end){
   // separar cortes normales (entran al reparto 75/25) de "Personalizado" (100% Jorge)
   let ingresosCortes=0, ingresosExtraJorge=0;
   ventas.forEach(v=>{
-    if(v.servicioKey==='custom'){ ingresosExtraJorge += Number(v.valorRecibido)||0; }
+    if(v.servicioKey==='custom' || v.servicio==='Personalizado'){ ingresosExtraJorge += Number(v.valorRecibido)||0; }
     else{ ingresosCortes += Number(v.valorRecibido)||0; }
   });
   const jorgeTotal = ingresosCortes*SPLIT_JORGE_CORTES + ingresosExtraJorge;
