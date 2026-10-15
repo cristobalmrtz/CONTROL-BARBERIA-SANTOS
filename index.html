@@ -737,6 +737,9 @@ function computeCierre(ventas, gastos, vales, start, end){
   });
   const jorgeTotal = ingresosCortes*SPLIT_JORGE_CORTES + ingresosExtraJorge;
   const cristobalTotal = ingresosCortes*SPLIT_CRISTOBAL_CORTES;
+  // Jorge absorbe toda la comisión de BOLD al recibir (sin importar si el corte
+  // era de reparto 75/25 o personalizado 100% suyo)
+  const jorgeNeto = jorgeTotal - comisionBoldTotal;
 
   // por servicio
   const servicioMap = {};
@@ -764,7 +767,7 @@ function computeCierre(ventas, gastos, vales, start, end){
     cajaEsperada, resultadoNeto,
     comisionBoldTotal, netoBoldTotal,
     salidasBoldNominal, comisionSalidaBold, netoSalidaBold,
-    ingresosCortes, ingresosExtraJorge, jorgeTotal, cristobalTotal,
+    ingresosCortes, ingresosExtraJorge, jorgeTotal, jorgeNeto, cristobalTotal,
     servicioMap, diaMap, maxDia,
   };
 }
@@ -853,9 +856,10 @@ function renderCierreResult(main, d){
   repartoCard.appendChild(el(`<table class="mini">
     <tr><td>Cortes (base del reparto 75/25)</td><td style="text-align:right;">${fmtMoney(d.ingresosCortes)}</td></tr>
     <tr><td>Personalizado (100% Jorge)</td><td style="text-align:right;">${fmtMoney(d.ingresosExtraJorge)}</td></tr>
+    ${d.comisionBoldTotal>0? `<tr><td>Comisión BOLD al recibir (la resta solo a Jorge)</td><td style="text-align:right; color:var(--red);">-${fmtMoney(d.comisionBoldTotal)}</td></tr>` : ''}
   </table>`));
   repartoCard.appendChild(el(`<div class="stat-grid" style="margin-top:10px;">
-    <div class="stat"><div class="lbl">Jorge (75% cortes + personalizado)</div><div class="val">${fmtMoney(d.jorgeTotal)}</div></div>
+    <div class="stat"><div class="lbl">Jorge neto (75% cortes + personalizado − comisión BOLD)</div><div class="val">${fmtMoney(d.jorgeNeto)}</div></div>
     <div class="stat"><div class="lbl">Cristóbal (25% cortes)</div><div class="val">${fmtMoney(d.cristobalTotal)}</div></div>
   </div>`));
   main.appendChild(repartoCard);
