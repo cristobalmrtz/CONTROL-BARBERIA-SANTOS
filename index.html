@@ -688,7 +688,7 @@ async function saveSaldoBold(valor){
   try{
     await gasPost({action:'setSaldoBold', weekStart: fecha, saldoInicial: Number(valor)||0});
     toast('Saldo guardado para '+fmtDateHuman(fecha));
-  }catch(e){ toast('No se pudo guardar el saldo'); }
+  }catch(e){ toast('No se pudo guardar: '+e.message); }
 }
 
 function computeCierre(ventas, gastos, vales, start, end){
@@ -740,14 +740,21 @@ function computeCierre(ventas, gastos, vales, start, end){
   // Jorge absorbe toda la comisión de BOLD al recibir (sin importar si el corte
   // era de reparto 75/25 o personalizado 100% suyo)
   const jorgeNeto = jorgeTotal - comisionBoldTotal;
+  // los vales (envíos/gastos que hace Jorge, sea en BOLD o en efectivo) se
+  // restan siempre de lo que le corresponde a Jorge, nunca de Cristóbal
+  const jorgeFinal = jorgeNeto - valesTotal;
+  const valesList = vales.map(v=>({descripcion:v.descripcion||'', valor:Number(v.valor)||0, medioPago:v.medioPago||'', fecha:v.fecha||''}));
 
-  // por servicio
+  // por servicio (con desglose de cuántos por cada medio de pago)
   const servicioMap = {};
   ventas.forEach(v=>{
     const k = v.servicio||'—';
-    if(!servicioMap[k]) servicioMap[k] = {cantidad:0, ingresos:0};
+    if(!servicioMap[k]) servicioMap[k] = {cantidad:0, ingresos:0, efectivo:0, bold:0, otro:0};
     servicioMap[k].cantidad++;
     servicioMap[k].ingresos += Number(v.valorRecibido)||0;
+    if(v.medioPago==='Efectivo') servicioMap[k].efectivo++;
+    else if(isBold(v.medioPago)) servicioMap[k].bold++;
+    else servicioMap[k].otro++;
   });
 
   // por día (para semanal/mensual)
@@ -767,7 +774,7 @@ function computeCierre(ventas, gastos, vales, start, end){
     cajaEsperada, resultadoNeto,
     comisionBoldTotal, netoBoldTotal,
     salidasBoldNominal, comisionSalidaBold, netoSalidaBold,
-    ingresosCortes, ingresosExtraJorge, jorgeTotal, jorgeNeto, cristobalTotal,
+    ingresosCortes, ingresosExtraJorge, jorgeTotal, jorgeNeto, jorgeFinal, cristobalTotal, valesList,
     servicioMap, diaMap, maxDia,
   };
 }
@@ -857,11 +864,23 @@ function renderCierreResult(main, d){
     <tr><td>Cortes (base del reparto 75/25)</td><td style="text-align:right;">${fmtMoney(d.ingresosCortes)}</td></tr>
     <tr><td>Personalizado (100% Jorge)</td><td style="text-align:right;">${fmtMoney(d.ingresosExtraJorge)}</td></tr>
     ${d.comisionBoldTotal>0? `<tr><td>Comisión BOLD al recibir (la resta solo a Jorge)</td><td style="text-align:right; color:var(--red);">-${fmtMoney(d.comisionBoldTotal)}</td></tr>` : ''}
+    ${d.valesBold>0? `<tr><td>Vales por BOLD (los resta solo a Jorge)</td><td style="text-align:right; color:var(--red);">-${fmtMoney(d.valesBold)}</td></tr>` : ''}
+    ${d.valesEfectivo>0? `<tr><td>Vales en efectivo (los resta solo a Jorge)</td><td style="text-align:right; color:var(--red);">-${fmtMoney(d.valesEfectivo)}</td></tr>` : ''}
   </table>`));
   repartoCard.appendChild(el(`<div class="stat-grid" style="margin-top:10px;">
-    <div class="stat"><div class="lbl">Jorge neto (75% cortes + personalizado − comisión BOLD)</div><div class="val">${fmtMoney(d.jorgeNeto)}</div></div>
+    <div class="stat"><div class="lbl">Jorge final (75% cortes + personalizado − comisión BOLD − vales)</div><div class="val">${fmtMoney(d.jorgeFinal)}</div></div>
     <div class="stat"><div class="lbl">Cristóbal (25% cortes)</div><div class="val">${fmtMoney(d.cristobalTotal)}</div></div>
   </div>`));
+  if(d.valesList && d.valesList.length){
+    const details = el(`<details style="margin-top:12px;"></details>`);
+    details.appendChild(el(`<summary style="cursor:pointer; font-size:13px; font-weight:700; color:var(--gold-dim);">Ver detalle de los ${d.valesList.length} vales</summary>`));
+    const dTable = el(`<table class="mini" style="margin-top:8px;"><tr><th>Descripción</th><th>Medio</th><th style="text-align:right;">Valor</th></tr></table>`);
+    d.valesList.forEach(v=>{
+      dTable.appendChild(el(`<tr><td>${v.descripcion||'—'}</td><td>${v.medioPago}</td><td style="text-align:right;">-${fmtMoney(v.valor)}</td></tr>`));
+    });
+    details.appendChild(dTable);
+    repartoCard.appendChild(details);
+  }
   main.appendChild(repartoCard);
 
   if(Object.keys(d.servicioMap).length){
@@ -869,7 +888,12 @@ function renderCierreResult(main, d){
     sCard.appendChild(el(`<div class="section-label">Resumen de cortes</div>`));
     const tbl = el(`<table class="mini"><tr><th>Tipo</th><th style="text-align:center;">Cant.</th><th style="text-align:right;">Ingresos</th></tr></table>`);
     Object.entries(d.servicioMap).forEach(([nombre,info])=>{
-      tbl.appendChild(el(`<tr><td>${nombre}</td><td style="text-align:center;">${info.cantidad}</td><td style="text-align:right;">${fmtMoney(info.ingresos)}</td></tr>`));
+      const partes = [];
+      if(info.bold>0) partes.push(info.bold+' BOLD');
+      if(info.efectivo>0) partes.push(info.efectivo+' efectivo');
+      if(info.otro>0) partes.push(info.otro+' otro');
+      const detalle = partes.length? `<div class="meta">${partes.join(' · ')}</div>` : '';
+      tbl.appendChild(el(`<tr><td>${nombre}${detalle}</td><td style="text-align:center;">${info.cantidad}</td><td style="text-align:right;">${fmtMoney(info.ingresos)}</td></tr>`));
     });
     sCard.appendChild(tbl);
     main.appendChild(sCard);
