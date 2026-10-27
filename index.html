@@ -585,8 +585,13 @@ function renderCierres(main){
     b.onclick = ()=>{
       state.cierreSub=k; state.cierre.data=null; state.cierre.saldoBoldLoaded=false;
       if(k==='semanal'){ state.cierre.saldoBoldFecha = toISO(addDays(startOfWeek(state.cierre.weekAnchor),6)); }
+      if(k==='mensual'){
+        const [my,mm] = state.cierre.month.split('-').map(Number);
+        const lastDay = new Date(my, mm, 0).getDate();
+        state.cierre.saldoBoldFecha = my+'-'+pad(mm)+'-'+pad(lastDay);
+      }
       render(); loadCierre();
-      if(k==='semanal') loadSaldoBold();
+      if(k==='semanal' || k==='mensual') loadSaldoBold();
     };
     sub.appendChild(b);
   });
@@ -613,7 +618,13 @@ function renderCierres(main){
   } else {
     pickerCard.appendChild(el(`<label class="field-label">Mes</label>`));
     const inp = el(`<input type="month" value="${state.cierre.month}">`);
-    inp.onchange = e=>{ state.cierre.month=e.target.value; state.cierre.data=null; render(); loadCierre(); };
+    inp.onchange = e=>{
+      state.cierre.month=e.target.value; state.cierre.data=null; state.cierre.saldoBoldLoaded=false;
+      const [my,mm] = state.cierre.month.split('-').map(Number);
+      const lastDay = new Date(my, mm, 0).getDate();
+      state.cierre.saldoBoldFecha = my+'-'+pad(mm)+'-'+pad(lastDay);
+      render(); loadCierre(); loadSaldoBold();
+    };
     pickerCard.appendChild(inp);
   }
   main.appendChild(pickerCard);
@@ -742,7 +753,6 @@ function computeCierre(ventas, gastos, vales, start, end){
   const jorgeNeto = jorgeTotal - comisionBoldTotal;
   // los vales (envíos/gastos que hace Jorge, sea en BOLD o en efectivo) se
   // restan siempre de lo que le corresponde a Jorge, nunca de Cristóbal
-  const jorgeFinal = jorgeNeto - valesTotal;
   const valesList = vales.map(v=>({descripcion:v.descripcion||'', valor:Number(v.valor)||0, medioPago:v.medioPago||'', fecha:v.fecha||''}));
 
   // por servicio (con desglose de cuántos por cada medio de pago)
@@ -774,7 +784,7 @@ function computeCierre(ventas, gastos, vales, start, end){
     cajaEsperada, resultadoNeto,
     comisionBoldTotal, netoBoldTotal,
     salidasBoldNominal, comisionSalidaBold, netoSalidaBold,
-    ingresosCortes, ingresosExtraJorge, jorgeTotal, jorgeNeto, jorgeFinal, cristobalTotal, valesList,
+    ingresosCortes, ingresosExtraJorge, jorgeTotal, jorgeNeto, cristobalTotal, valesList,
     servicioMap, diaMap, maxDia,
   };
 }
@@ -784,6 +794,15 @@ function renderCierreResult(main, d){
     main.appendChild(el(`<div class="empty">No se pudo calcular el cierre. Intenta de nuevo.</div>`));
     return;
   }
+  if(state.cierreSub==='diario'){
+    renderCierreDiario(main, d);
+  } else {
+    renderCierreSimplificado(main, d);
+  }
+}
+
+/* Vista completa para el cierre Diario (sin cambios respecto a antes) */
+function renderCierreDiario(main, d){
   const range = getRangeForCierre();
 
   const card = el(`<div class="card"></div>`);
@@ -828,47 +847,24 @@ function renderCierreResult(main, d){
       <tr><td>4x1000 al enviar (${TRANSFER_TAX_PCT}%)</td><td style="text-align:right; color:var(--red);">-${fmtMoney(d.comisionSalidaBold)}</td></tr>
       <tr><td><strong>Total que sale de BOLD</strong></td><td style="text-align:right;"><strong>-${fmtMoney(d.netoSalidaBold)}</strong></td></tr>
     </table>`));
-    boldCard.appendChild(el(`<div class="hint">Si Jorge hizo algún envío que no quedó registrado como vale/gasto en BOLD, ese sí va a seguir generando diferencia.</div>`));
     main.appendChild(boldCard);
   }
 
-  if(state.cierreSub==='semanal'){
-    const saldoCard = el(`<div class="card"></div>`);
-    saldoCard.appendChild(el(`<div class="section-label">Saldo de la cuenta BOLD</div>`));
-    saldoCard.appendChild(el(`<label class="field-label">Fecha del cierre (el día que lo registras)</label>`));
-    const fechaInp = el(`<input type="date" value="${state.cierre.saldoBoldFecha}">`);
-    fechaInp.onchange = e=>{ state.cierre.saldoBoldFecha = e.target.value; state.cierre.saldoBoldLoaded=false; render(); loadSaldoBold(); };
-    saldoCard.appendChild(fechaInp);
-    if(!state.cierre.saldoBoldLoaded){
-      saldoCard.appendChild(el(`<div class="empty">Cargando…</div>`));
-    } else {
-      saldoCard.appendChild(el(`<label class="field-label" style="margin-top:12px;">Con cuánto empezó la cuenta ese día</label>`));
-      const row = el(`<div class="row" style="align-items:center;"></div>`);
-      const inp = el(`<input type="number" inputmode="numeric" placeholder="0" value="${state.cierre.saldoBoldInicial}">`);
-      inp.oninput = e=>{ state.cierre.saldoBoldInicial = e.target.value; };
-      const saveBtn = el(`<button class="btn btn-ghost" style="flex:none; width:auto; padding:11px 16px;">Guardar</button>`);
-      saveBtn.onclick = async ()=>{ await saveSaldoBold(state.cierre.saldoBoldInicial); };
-      row.appendChild(inp); row.appendChild(saveBtn);
-      saldoCard.appendChild(row);
-      const saldoInicial = Number(state.cierre.saldoBoldInicial)||0;
-      const saldoEsperado = saldoInicial + d.netoBoldTotal - d.netoSalidaBold;
-      saldoCard.appendChild(el(`<div class="stat wide" style="margin-top:12px;"><div class="lbl">Saldo esperado al cierre</div><div class="val">${fmtMoney(saldoEsperado)}</div></div>`));
-      saldoCard.appendChild(el(`<div class="hint">= saldo inicial + neto recibido en BOLD − lo que salió (vales/gastos en BOLD + su comisión). Si no coincide con lo que muestra BOLD, revisa si falta registrar algún envío de Jorge como vale/gasto en BOLD.</div>`));
-    }
-    main.appendChild(saldoCard);
-  }
-
+  const feeBold = d.comisionSalidaBold;
+  const jorgeFinal = d.jorgeNeto - d.valesEfectivo - d.valesBold - feeBold;
   const repartoCard = el(`<div class="card"></div>`);
   repartoCard.appendChild(el(`<div class="section-label">Reparto Jorge / Cristóbal</div>`));
   repartoCard.appendChild(el(`<table class="mini">
     <tr><td>Cortes (base del reparto 75/25)</td><td style="text-align:right;">${fmtMoney(d.ingresosCortes)}</td></tr>
     <tr><td>Personalizado (100% Jorge)</td><td style="text-align:right;">${fmtMoney(d.ingresosExtraJorge)}</td></tr>
     ${d.comisionBoldTotal>0? `<tr><td>Comisión BOLD al recibir (la resta solo a Jorge)</td><td style="text-align:right; color:var(--red);">-${fmtMoney(d.comisionBoldTotal)}</td></tr>` : ''}
-    ${d.valesBold>0? `<tr><td>Vales por BOLD (los resta solo a Jorge)</td><td style="text-align:right; color:var(--red);">-${fmtMoney(d.valesBold)}</td></tr>` : ''}
-    ${d.valesEfectivo>0? `<tr><td>Vales en efectivo (los resta solo a Jorge)</td><td style="text-align:right; color:var(--red);">-${fmtMoney(d.valesEfectivo)}</td></tr>` : ''}
+    <tr><td>Vales en efectivo (los resta solo a Jorge)</td><td style="text-align:right; color:var(--red);">-${fmtMoney(d.valesEfectivo)}</td></tr>
+    <tr><td>Vales por BOLD (los resta solo a Jorge)</td><td style="text-align:right; color:var(--red);">-${fmtMoney(d.valesBold)}</td></tr>
+    ${feeBold>0? `<tr><td>4x1000 de los envíos BOLD (resta solo a Jorge)</td><td style="text-align:right; color:var(--red);">-${fmtMoney(feeBold)}</td></tr>` : ''}
   </table>`));
+  repartoCard.appendChild(el(`<div class="hint">Este cierre diario no conoce el saldo inicial de BOLD, así que resta el total de vales BOLD. Para ver solo el excedente, consulta Semanal o Mensual.</div>`));
   repartoCard.appendChild(el(`<div class="stat-grid" style="margin-top:10px;">
-    <div class="stat"><div class="lbl">Jorge final (75% cortes + personalizado − comisión BOLD − vales)</div><div class="val">${fmtMoney(d.jorgeFinal)}</div></div>
+    <div class="stat"><div class="lbl">Jorge final</div><div class="val">${fmtMoney(jorgeFinal)}</div></div>
     <div class="stat"><div class="lbl">Cristóbal (25% cortes)</div><div class="val">${fmtMoney(d.cristobalTotal)}</div></div>
   </div>`));
   if(d.valesList && d.valesList.length){
@@ -899,21 +895,6 @@ function renderCierreResult(main, d){
     main.appendChild(sCard);
   }
 
-  if((state.cierreSub==='semanal' || state.cierreSub==='mensual') && Object.keys(d.diaMap).length){
-    const dCard = el(`<div class="card"></div>`);
-    dCard.appendChild(el(`<div class="section-label">Ingresos por día${d.maxDia? ' · mejor día: '+fmtDateHuman(d.maxDia):''}</div>`));
-    const maxVal = Math.max(...Object.values(d.diaMap), 1);
-    Object.keys(d.diaMap).sort().forEach(day=>{
-      const pct = Math.round((d.diaMap[day]/maxVal)*100);
-      dCard.appendChild(el(`<div class="bar-row">
-        <div class="lbl">${fmtDateHuman(day)}</div>
-        <div class="bar-track"><div class="bar-fill" style="width:${pct}%"></div></div>
-        <div class="bar-val">${fmtMoney(d.diaMap[day])}</div>
-      </div>`));
-    });
-    main.appendChild(dCard);
-  }
-
   if(d.valesTotal){
     const vCard = el(`<div class="card"></div>`);
     vCard.appendChild(el(`<div class="section-label">Vales</div>`));
@@ -926,6 +907,110 @@ function renderCierreResult(main, d){
     </table>`));
     main.appendChild(vCard);
   }
+}
+
+/* Vista simplificada para Semanal y Mensual */
+function renderCierreSimplificado(main, d){
+  const mostrarSaldoBold = true;
+
+  // ---------- 1) Saldo inicial de BOLD ----------
+  if(mostrarSaldoBold){
+    const saldoCard = el(`<div class="card"></div>`);
+    saldoCard.appendChild(el(`<div class="section-label">Saldo de la cuenta BOLD</div>`));
+    saldoCard.appendChild(el(`<label class="field-label">Fecha del cierre (el día que lo registras)</label>`));
+    const fechaInp = el(`<input type="date" value="${state.cierre.saldoBoldFecha}">`);
+    fechaInp.onchange = e=>{ state.cierre.saldoBoldFecha = e.target.value; state.cierre.saldoBoldLoaded=false; render(); loadSaldoBold(); };
+    saldoCard.appendChild(fechaInp);
+    if(!state.cierre.saldoBoldLoaded){
+      saldoCard.appendChild(el(`<div class="empty">Cargando…</div>`));
+    } else {
+      saldoCard.appendChild(el(`<label class="field-label" style="margin-top:12px;">Con cuánto empezó la cuenta ese día</label>`));
+      const row = el(`<div class="row" style="align-items:center;"></div>`);
+      const inp = el(`<input type="number" inputmode="numeric" placeholder="0" value="${state.cierre.saldoBoldInicial}">`);
+      inp.oninput = e=>{ state.cierre.saldoBoldInicial = e.target.value; };
+      const saveBtn = el(`<button class="btn btn-ghost" style="flex:none; width:auto; padding:11px 16px;">Guardar</button>`);
+      saveBtn.onclick = async ()=>{ await saveSaldoBold(state.cierre.saldoBoldInicial); };
+      row.appendChild(inp); row.appendChild(saveBtn);
+      saldoCard.appendChild(row);
+    }
+    main.appendChild(saldoCard);
+  }
+
+  // El saldo inicial de BOLD es plata "vieja" de Jorge de antes de este
+  // periodo: los vales BOLD solo afectan el cierre en la parte que se pasa
+  // de ese saldo inicial (el excedente).
+  const saldoInicialBoldConocido = mostrarSaldoBold && state.cierre.saldoBoldLoaded;
+  const saldoInicialBold = saldoInicialBoldConocido ? (Number(state.cierre.saldoBoldInicial)||0) : 0;
+  const coberturaBold = saldoInicialBoldConocido ? Math.min(d.valesBold, saldoInicialBold) : 0;
+  const excedenteBold = saldoInicialBoldConocido ? Math.max(0, d.valesBold - saldoInicialBold) : d.valesBold;
+  const feeBold = d.comisionSalidaBold; // el 4x1000 de los envíos BOLD, siempre se resta completo a Jorge
+  const jorgeFinal = d.jorgeNeto - d.valesEfectivo - excedenteBold - feeBold;
+
+  // ---------- 2) Reparto Jorge / Cristóbal ----------
+  const repartoCard = el(`<div class="card"></div>`);
+  repartoCard.appendChild(el(`<div class="section-label">Reparto Jorge / Cristóbal</div>`));
+  repartoCard.appendChild(el(`<table class="mini">
+    <tr><td>Cortes (base del reparto 75/25)</td><td style="text-align:right;">${fmtMoney(d.ingresosCortes)}</td></tr>
+    <tr><td>Personalizado (100% Jorge)</td><td style="text-align:right;">${fmtMoney(d.ingresosExtraJorge)}</td></tr>
+    ${d.comisionBoldTotal>0? `<tr><td>Comisión BOLD al recibir (la resta solo a Jorge)</td><td style="text-align:right; color:var(--red);">-${fmtMoney(d.comisionBoldTotal)}</td></tr>` : ''}
+    <tr><td>Vales en efectivo (los resta solo a Jorge)</td><td style="text-align:right; color:var(--red);">-${fmtMoney(d.valesEfectivo)}</td></tr>
+    <tr><td>Vales por BOLD — total</td><td style="text-align:right;">${fmtMoney(d.valesBold)}</td></tr>
+    ${saldoInicialBoldConocido? `<tr><td style="padding-left:16px; color:var(--muted-fg);">cubierto con saldo inicial BOLD (no afecta este cierre)</td><td style="text-align:right; color:var(--muted-fg);">${fmtMoney(coberturaBold)}</td></tr>` : ''}
+    <tr><td style="padding-left:16px;">excedente que sí se resta a Jorge</td><td style="text-align:right; color:var(--red);">-${fmtMoney(excedenteBold)}</td></tr>
+    ${feeBold>0? `<tr><td>4x1000 de los envíos BOLD (resta solo a Jorge)</td><td style="text-align:right; color:var(--red);">-${fmtMoney(feeBold)}</td></tr>` : ''}
+  </table>`));
+  if(!saldoInicialBoldConocido && d.valesBold>0){
+    repartoCard.appendChild(el(`<div class="hint">Para que los vales BOLD solo descuenten el excedente sobre el saldo inicial, consulta este cierre desde Semanal o Mensual.</div>`));
+  }
+  repartoCard.appendChild(el(`<div class="stat-grid" style="margin-top:10px;">
+    <div class="stat"><div class="lbl">Jorge final</div><div class="val">${fmtMoney(jorgeFinal)}</div></div>
+    <div class="stat"><div class="lbl">Cristóbal (25% cortes)</div><div class="val">${fmtMoney(d.cristobalTotal)}</div></div>
+  </div>`));
+  if(d.valesList && d.valesList.length){
+    const details = el(`<details style="margin-top:12px;"></details>`);
+    details.appendChild(el(`<summary style="cursor:pointer; font-size:13px; font-weight:700; color:var(--gold-dim);">Ver detalle de los ${d.valesList.length} vales</summary>`));
+    const dTable = el(`<table class="mini" style="margin-top:8px;"><tr><th>Descripción</th><th>Medio</th><th style="text-align:right;">Valor</th></tr></table>`);
+    d.valesList.forEach(v=>{
+      dTable.appendChild(el(`<tr><td>${v.descripcion||'—'}</td><td>${v.medioPago}</td><td style="text-align:right;">-${fmtMoney(v.valor)}</td></tr>`));
+    });
+    details.appendChild(dTable);
+    repartoCard.appendChild(details);
+  }
+  main.appendChild(repartoCard);
+
+  // ---------- 3) Resumen de cortes ----------
+  if(Object.keys(d.servicioMap).length){
+    const sCard = el(`<div class="card"></div>`);
+    sCard.appendChild(el(`<div class="section-label">Resumen de cortes</div>`));
+    const tbl = el(`<table class="mini"><tr><th>Tipo</th><th style="text-align:center;">Cant.</th><th style="text-align:right;">Ingresos</th></tr></table>`);
+    Object.entries(d.servicioMap).forEach(([nombre,info])=>{
+      const partes = [];
+      if(info.bold>0) partes.push(info.bold+' BOLD');
+      if(info.efectivo>0) partes.push(info.efectivo+' efectivo');
+      if(info.otro>0) partes.push(info.otro+' otro');
+      const detalle = partes.length? `<div class="meta">${partes.join(' · ')}</div>` : '';
+      tbl.appendChild(el(`<tr><td>${nombre}${detalle}</td><td style="text-align:center;">${info.cantidad}</td><td style="text-align:right;">${fmtMoney(info.ingresos)}</td></tr>`));
+    });
+    sCard.appendChild(tbl);
+    main.appendChild(sCard);
+  }
+
+  // ---------- 4) Cuánto debería haber en efectivo y en BOLD ----------
+  const finalCard = el(`<div class="card"></div>`);
+  finalCard.appendChild(el(`<div class="section-label">Cuánto debería haber</div>`));
+  const finalGrid = el(`<div class="stat-grid"></div>`);
+  finalGrid.appendChild(el(`<div class="stat"><div class="lbl">En efectivo</div><div class="val">${fmtMoney(d.cajaEsperada)}</div></div>`));
+  if(saldoInicialBoldConocido){
+    const saldoEsperadoBold = saldoInicialBold + d.netoBoldTotal - d.netoSalidaBold;
+    finalGrid.appendChild(el(`<div class="stat"><div class="lbl">En BOLD</div><div class="val">${fmtMoney(saldoEsperadoBold)}</div></div>`));
+  } else {
+    finalGrid.appendChild(el(`<div class="stat"><div class="lbl">En BOLD</div><div class="val">—</div></div>`));
+  }
+  finalCard.appendChild(finalGrid);
+  if(!saldoInicialBoldConocido){
+    finalCard.appendChild(el(`<div class="hint">Falta el saldo inicial de BOLD de arriba para calcular cuánto debería haber en la cuenta.</div>`));
+  }
+  main.appendChild(finalCard);
 }
 
 /* ---------------- delete confirm ---------------- */
@@ -1002,7 +1087,7 @@ function openSettings(){
 
 /* ---------------- wiring ---------------- */
 document.querySelectorAll('nav.tabs button').forEach(b=>{
-  b.onclick = ()=>{ state.tab = b.dataset.tab; if(state.tab==='cierres'){ state.cierre.data=null; } render(); if(state.tab==='cierres'){ loadCierre(); if(state.cierreSub==='semanal') loadSaldoBold(); } };
+  b.onclick = ()=>{ state.tab = b.dataset.tab; if(state.tab==='cierres'){ state.cierre.data=null; } render(); if(state.tab==='cierres'){ loadCierre(); if(state.cierreSub==='semanal' || state.cierreSub==='mensual') loadSaldoBold(); } };
 });
 document.getElementById('btnSettings').onclick = openSettings;
 
